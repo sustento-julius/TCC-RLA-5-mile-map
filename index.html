@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TCC Round 6 — Project Area Planner (Los Angeles)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root{
+    --elacc:#D85A30; --ltsc:#1D9E75; --esp:#185FA5;
+    --ink:#1c2530; --muted:#5d6b7a; --line:#e4e8ee; --bg:#f4f6f9;
+    --warn:#c0392b; --ok:#1D9E75;
+    --panel-w:330px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink)}
+  #map{position:absolute;inset:0 var(--panel-w) 0 0}
+  #panel{position:absolute;top:0;right:0;bottom:0;width:var(--panel-w);background:#fff;border-left:1px solid var(--line);
+         overflow-y:auto;padding:18px 18px 28px;box-shadow:-2px 0 12px rgba(0,0,0,.04)}
+  h1{font-size:16px;margin:0 0 2px}
+  .sub{font-size:11.5px;color:var(--muted);margin:0 0 16px;line-height:1.45}
+  .card{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;background:#fff}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  button{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);background:#fff;color:var(--ink);
+         padding:8px 12px;border-radius:8px;cursor:pointer;transition:.12s}
+  button:hover{background:var(--bg)}
+  button.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  button.primary:hover{opacity:.9}
+  button:disabled{opacity:.4;cursor:default}
+  .area{font-size:34px;font-weight:700;line-height:1;letter-spacing:-.5px}
+  .area small{font-size:14px;font-weight:600;color:var(--muted)}
+  .limit{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .bar{height:7px;border-radius:4px;background:var(--line);margin-top:9px;overflow:hidden}
+  .bar > i{display:block;height:100%;background:var(--ok);width:0;transition:width .15s,background .15s}
+  .warnbox{display:none;margin-top:11px;padding:9px 11px;border-radius:8px;background:#fdecea;border:1px solid #f5c6c0;
+           color:var(--warn);font-size:12px;font-weight:600;line-height:1.4}
+  .warnbox.show{display:block}
+  .orgrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line)}
+  .orgrow:last-child{border-bottom:0}
+  .orgname{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600}
+  .dot{width:13px;height:13px;border-radius:50%;flex:none}
+  .count{font-variant-numeric:tabular-nums}
+  .count b{font-size:18px}
+  .count .of{color:var(--muted);font-size:12px}
+  .total{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding-top:12px;border-top:2px solid var(--ink)}
+  .total .num{font-size:24px;font-weight:700}
+  .hint{font-size:11.5px;color:var(--muted);line-height:1.5}
+  .hint b{color:var(--ink)}
+  .legend{display:flex;flex-direction:column;gap:7px;font-size:12.5px}
+  .legend .orgname{font-weight:500}
+  .secnote{font-size:10.5px;color:var(--muted);margin-top:14px;line-height:1.5;border-top:1px solid var(--line);padding-top:12px}
+  .leaflet-container{background:#dfe6ec}
+  .vtx{cursor:grab}
+  input[type=range]{width:100%;margin:9px 0 2px;accent-color:var(--ink)}
+  .sliderlabel{font-size:12px;color:var(--muted)}
+  .sliderlabel b{color:var(--ink)}
+  .btn-wide{width:100%;justify-content:center}
+  .cardhd{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  .spinner{display:none;font-size:11.5px;color:var(--muted);margin-top:8px}
+  .spinner.show{display:block}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside id="panel">
+  <h1>TCC R6 Project Area Planner</h1>
+  <p class="sub">Auto-build a contiguous, gerrymander-style district that connects the most properties within the ≤5.0 sq mi limit — or draw one by hand. Priority: ELACC first, then LTSC, then Esperanza.</p>
+
+  <div class="card">
+    <div class="area"><span id="sqmi">0.00</span> <small>sq mi</small></div>
+    <div class="limit">TCC R6 urban implementation limit: <b>5.0 sq mi</b></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="warnbox" id="warn">⚠ Over the 5.0 sq mi hard limit (Final Guidelines §1.2, April 2026). Shrink the zone.</div>
+  </div>
+
+  <div class="card">
+    <p class="cardhd">Auto-build district</p>
+    <button id="btn-auto" class="primary btn-wide">🧩 Build best ≤5 sq mi district</button>
+    <label class="sliderlabel">Corridor buffer: <b><span id="bufval">0.12</span> mi</b> around each property &amp; connector</label>
+    <input type="range" id="buf" min="0.04" max="0.40" step="0.01" value="0.12">
+    <div class="spinner" id="spin">Computing district…</div>
+    <p class="hint" style="margin-top:8px">Connects properties along a minimum corridor network and buffers it into one contiguous zone. Thinner buffer reaches more properties; wider buffer is more realistic as a service area.</p>
+  </div>
+
+  <div class="card">
+    <p class="cardhd">Or draw by hand</p>
+    <div class="toolbar" style="margin-bottom:0">
+      <button id="btn-draw">✏️ Draw zone</button>
+      <button id="btn-finish" disabled>Finish</button>
+      <button id="btn-undo" disabled>Undo pt</button>
+      <button id="btn-clear" disabled>Clear</button>
+    </div>
+    <p class="hint" style="margin-top:10px">Click <b>Draw zone</b>, then click the map to drop boundary points. Drag any point to refine; double-click a point to delete it. Stats update live.</p>
+  </div>
+
+  <div class="card">
+    <div class="orgrow">
+      <span class="orgname"><span class="dot" style="background:var(--elacc)"></span>ELACC</span>
+      <span class="count"><b id="c-elacc">0</b> <span class="of">/ <span id="t-elacc">0</span></span></span>
+    </div>
+    <div class="orgrow">
+      <span class="orgname"><span class="dot" style="background:var(--ltsc)"></span>LTSC</span>
+      <span class="count"><b id="c-ltsc">0</b> <span class="of">/ <span id="t-ltsc">0</span></span></span>
+    </div>
+    <div class="orgrow">
+      <span class="orgname"><span class="dot" style="background:var(--esp)"></span>Esperanza</span>
+      <span class="count"><b id="c-esp">0</b> <span class="of">/ <span id="t-esp">0</span></span></span>
+    </div>
+    <div class="total"><span>Total inside</span><span class="num"><span id="c-total">0</span> <span class="of" style="font-size:13px;color:var(--muted)">/ <span id="t-total">0</span></span></span></div>
+  </div>
+
+  <div class="card">
+    <div class="legend">
+      <span class="orgname"><span class="dot" style="background:var(--elacc)"></span>ELACC — <span id="leg-elacc"></span> properties</span>
+      <span class="orgname"><span class="dot" style="background:var(--ltsc)"></span>LTSC — <span id="leg-ltsc"></span> properties</span>
+      <span class="orgname"><span class="dot" style="background:var(--esp)"></span>Esperanza — <span id="leg-esp"></span> properties</span>
+    </div>
+    <p class="secnote">Markers placed via OpenStreetMap / Nominatim geocoding of street addresses. Esperanza's South L.A. cluster sits well southwest of the ELACC/LTSC Boyle Heights–Koreatown corridor: a realistic compact zone (wider buffer) captures ELACC + nearby LTSC only, while a very thin gerrymandered corridor can technically thread all three under 5 sq mi.</p>
+  </div>
+</aside>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+<script>
+const PROPERTIES = [{"org":"ELACC","name":"Las Margaritas (Cummings)","address":"319 Cummings Ave, Los Angeles, CA 90033","lat":34.0475153,"lon":-118.2137678},{"org":"ELACC","name":"Las Margaritas (115 N Soto)","address":"115 N Soto St, Los Angeles, CA 90033","lat":34.044295,"lon":-118.2095},{"org":"ELACC","name":"Los Girasoles","address":"952 S Record Ave, Los Angeles, CA 90023","lat":34.0228273,"lon":-118.1825407},{"org":"ELACC","name":"Cuatro Vientos","address":"5331 E Huntington Dr N, Los Angeles, CA 90032","lat":34.0847898,"lon":-118.1897892},{"org":"ELACC","name":"Paseo del Sol","address":"417 Soto Street, Los Angeles, CA 90033","lat":34.0403025,"lon":-118.2120634},{"org":"ELACC","name":"Boyle Hotel - Cummings Block","address":"1781 E 1st Street, Los Angeles, CA 90033","lat":34.0473371,"lon":-118.2201413},{"org":"ELACC","name":"Sol y Luna","address":"2917 E 1st Street, Los Angeles, CA 90033","lat":34.0406777,"lon":-118.2024766},{"org":"ELACC","name":"Las Mariposas (Evergreen)","address":"438 Evergreen Ave, Los Angeles, CA 90023","lat":34.0363646,"lon":-118.2047297},{"org":"ELACC","name":"Las Mariposas (3rd St.)","address":"2537 E 3rd St, Los Angeles, CA 90023","lat":34.0407362,"lon":-118.2095248},{"org":"ELACC","name":"Percy Apartments (Percy St.)","address":"3807 Percy Street, Los Angeles, CA 90023","lat":34.025398,"lon":-118.1914763},{"org":"ELACC","name":"Percy Apartments (Indiana St.)","address":"732 S Indiana St, Los Angeles, CA 90023","lat":34.0259251,"lon":-118.1922138},{"org":"ELACC","name":"Beswick Senior Apts","address":"3553 Beswick Street, Los Angeles, CA 90023","lat":34.0223534,"lon":-118.1996251},{"org":"ELACC","name":"Kern Villa Apartments","address":"200 N Kern Ave, Los Angeles, CA 90022","lat":34.0382458,"lon":-118.1627486},{"org":"ELACC","name":"Las Flores","address":"1063 S Eastman Ave, Los Angeles, CA 90023","lat":34.0355819,"lon":-118.1858789},{"org":"ELACC","name":"Linda Vista Senior Apts","address":"630 S St Louis St, Los Angeles, CA 90022","lat":34.0385866,"lon":-118.2175648},{"org":"ELACC","name":"Alta Vista Apts","address":"5051 E 3rd Street, Los Angeles, CA 90022","lat":34.0334899,"lon":-118.1570324},{"org":"ELACC","name":"Whittier Place","address":"4125 Whittier Blvd, Los Angeles, CA 90023","lat":34.0240495,"lon":-118.1822592},{"org":"ELACC","name":"Cielito Lindo Apartments I","address":"2407 E 1st Street, Los Angeles, CA 90033","lat":34.0436944,"lon":-118.2095315},{"org":"ELACC","name":"Cielito Lindo Apartments II","address":"2427 E 1st Street, Los Angeles, CA 90033","lat":34.0436126,"lon":-118.2093466},{"org":"ELACC","name":"530 S Boyle Ave","address":"530 S Boyle Avenue, Los Angeles, CA 90033","lat":34.0410358,"lon":-118.2195274},{"org":"ELACC","name":"Blades","address":"811 Blades Street, Los Angeles, CA 90033","lat":34.0469956,"lon":-118.196412},{"org":"ELACC","name":"Eastlake","address":"3211 Altura Walk, Los Angeles, CA 90031","lat":34.0759228,"lon":-118.207595},{"org":"ELACC","name":"Playground Apartments","address":"1462 N Playground St, Los Angeles, CA 90031","lat":34.0611736,"lon":-118.199777},{"org":"Esperanza","name":"Casa Esperanza","address":"206 E 23rd St, Los Angeles, CA 90011","lat":34.0266231,"lon":-118.2658173},{"org":"Esperanza","name":"Alegria Apartments","address":"801 W 23rd St, Los Angeles, CA 90007","lat":34.032471,"lon":-118.277658},{"org":"Esperanza","name":"Villa Esperanza","address":"255 E 28th St, Los Angeles, CA 90011","lat":34.0225963,"lon":-118.2679687},{"org":"Esperanza","name":"La Estrella","address":"1979 Estrella Ave, Los Angeles, CA 90007","lat":34.0340055,"lon":-118.2754563},{"org":"Esperanza","name":"Budlong","address":"2727 S Budlong Ave, Los Angeles, CA 90007","lat":34.0302714,"lon":-118.2959949},{"org":"Esperanza","name":"Amistad","address":"1959 Estrella Ave, Los Angeles, CA 90007","lat":34.0341169,"lon":-118.2753847},{"org":"Esperanza","name":"Senderos","address":"2141 Estrella Ave, Los Angeles, CA 90007","lat":34.0326978,"lon":-118.276297},{"org":"Esperanza","name":"39th Street","address":"1230 W 39th Street, Los Angeles, CA 90037","lat":34.0154244,"lon":-118.2982343},{"org":"LTSC","name":"Epworth Apartments","address":"6525 S Normandie Ave, Los Angeles, CA 90044","lat":33.980221,"lon":-118.300363},{"org":"LTSC","name":"Menlo Family Housing","address":"1230 S Menlo Ave, Los Angeles, CA 90006","lat":34.0498269,"lon":-118.2907146},{"org":"LTSC","name":"PHD Apartments (20th St.)","address":"1745 W 20th St, Los Angeles, CA 90007","lat":34.038214,"lon":-118.2952836},{"org":"LTSC","name":"PHD Apartments (Arlington Ave.)","address":"1401 S Arlington Ave, Los Angeles, CA 90019","lat":34.0522964,"lon":-118.3152656},{"org":"LTSC","name":"PHD Apartments (Kenmore Ave.)","address":"1400 S Kenmore Ave, Los Angeles, CA 90006","lat":34.046315,"lon":-118.2968885},{"org":"LTSC","name":"PHD Apartments (Kingsley Dr.)","address":"1020 S Kingsley Dr, Los Angeles, CA 90006","lat":34.0521787,"lon":-118.3030164},{"org":"LTSC","name":"PHD Apartments (Magnolia Ave.)","address":"1810 Magnolia Ave, Los Angeles, CA 90006","lat":34.0413281,"lon":-118.286271},{"org":"LTSC","name":"36th Street & Broadway","address":"157 E 36th Street, Los Angeles, CA 90011","lat":34.016721,"lon":-118.2726055},{"org":"LTSC","name":"Casa Heiwa","address":"231 E Third St, Los Angeles, CA 90013","lat":34.0484524,"lon":-118.2436599},{"org":"LTSC","name":"Casa Yonde","address":"1053 S New Hampshire Ave, Los Angeles, CA 90006","lat":34.0517369,"lon":-118.2927559},{"org":"LTSC","name":"Cesar Chavez Gardens","address":"555 W Cesar E Chavez Ave, Los Angeles, CA 90012","lat":34.0596137,"lon":-118.2419658},{"org":"LTSC","name":"Daimaru Hotel","address":"345 E First St, Los Angeles, CA 90012","lat":34.0497819,"lon":-118.2396427},{"org":"LTSC","name":"Durae Senior Apts (Crenshaw)","address":"906 Crenshaw Blvd, Los Angeles, CA 90019","lat":34.0560151,"lon":-118.3221102},{"org":"LTSC","name":"Durae Senior Apts (Kingsley)","address":"540 S Kingsley Dr, Los Angeles, CA 90020","lat":34.064604,"lon":-118.302753},{"org":"LTSC","name":"Hyperion","address":"2449 Hyperion Ave, Los Angeles, CA 90027","lat":34.1038137,"lon":-118.2734162},{"org":"LTSC","name":"KYC Apartments","address":"3987 W 7th St, Los Angeles, CA 90005","lat":34.0599651,"lon":-118.313913},{"org":"LTSC","name":"PWC Family Housing","address":"153 N Glendale Blvd, Los Angeles, CA 90026","lat":34.0864541,"lon":-118.2598852},{"org":"LTSC","name":"Reno Apartments","address":"340 S Reno St, Los Angeles, CA 90057","lat":34.0675639,"lon":-118.2836203},{"org":"LTSC","name":"San Pedro Firm Building","address":"112 Judge John Aiso St, Los Angeles, CA 90012","lat":34.0505855,"lon":-118.2402249},{"org":"LTSC","name":"UCA - Union Center for the Arts","address":"120 Judge John Aiso St, Los Angeles, CA 90012","lat":34.0507585,"lon":-118.2401523}];
+const COLORS = {ELACC:'#D85A30', LTSC:'#1D9E75', Esperanza:'#185FA5'};
+
+const map = L.map('map', {doubleClickZoom:false}).setView([34.04,-118.24], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// ---- plot properties ----
+const propLayers = [];
+PROPERTIES.forEach(p => {
+  const m = L.circleMarker([p.lat, p.lon], {
+    radius:7, color:'#fff', weight:2, fillColor:COLORS[p.org], fillOpacity:1
+  }).addTo(map);
+  m.bindTooltip(
+    '<b>'+p.name+'</b><br>'+p.address+'<br><span style="color:'+COLORS[p.org]+';font-weight:600">'+p.org+'</span>',
+    {direction:'top', offset:[0,-6]}
+  );
+  propLayers.push({p, m});
+});
+
+// totals per org
+const totals = {ELACC:0, LTSC:0, Esperanza:0};
+PROPERTIES.forEach(p => totals[p.org]++);
+const setText = (id,v) => document.getElementById(id).textContent = v;
+setText('t-elacc', totals.ELACC); setText('t-ltsc', totals.LTSC); setText('t-esp', totals.Esperanza);
+setText('t-total', PROPERTIES.length);
+setText('leg-elacc', totals.ELACC); setText('leg-ltsc', totals.LTSC); setText('leg-esp', totals.Esperanza);
+
+const LIMIT_SQMI = 5.0;
+const M2_PER_SQMI = 2589988.110336;
+
+// ---- shared zone state ----
+let mode = null;            // 'manual' | 'auto' | null
+// manual mode
+let drawing = false;
+let vertices = [];          // [{lat,lng}]
+let handles = [];           // vertex marker handles
+let poly = null;            // L.polygon
+let preview = null;         // L.polyline rubber band while drawing
+// auto mode
+let autoLayer = null;       // L.geoJSON of the district
+let autoZone = null;        // turf polygon/multipolygon
+
+const btnDraw=document.getElementById('btn-draw'), btnFinish=document.getElementById('btn-finish'),
+      btnUndo=document.getElementById('btn-undo'), btnClear=document.getElementById('btn-clear'),
+      btnAuto=document.getElementById('btn-auto'), bufSlider=document.getElementById('buf'),
+      bufVal=document.getElementById('bufval'), spin=document.getElementById('spin');
+
+// ---- the active zone as a turf feature (drives area + counts for both modes) ----
+function currentZone(){
+  if(mode==='auto') return autoZone;
+  if(vertices.length>=3){
+    const ring=vertices.map(v=>[v.lng,v.lat]); ring.push(ring[0]);
+    try{ return turf.polygon([ring]); }catch(e){ return null; }
+  }
+  return null;
+}
+
+// =================== AUTO-BUILD ===================
+const P = i => [PROPERTIES[i].lon, PROPERTIES[i].lat];
+const miBetween = (a,b) => turf.distance(turf.point(a), turf.point(b), {units:'miles'});
+const orgIdx = org => PROPERTIES.map((p,i)=>i).filter(i=>PROPERTIES[i].org===org);
+
+const nearMi = (i,sel) => Math.min(...sel.map(s=>miBetween(P(i),P(s))));
+
+// nearest already-selected property to candidate i
+const nearestSel = (i,sel) => sel.reduce((b,s)=> miBetween(P(s),P(i))<miBetween(P(b),P(i))?s:b, sel[0]);
+
+// greedily grow a <=5 sq mi district: ELACC first, then LTSC, then Esperanza.
+// Incremental: keep a running union; each candidate adds one buffered connector
+// (its round end-cap also covers the new property), so we union just that piece.
+function autoBuild(bufMi){
+  const ela = orgIdx('ELACC');
+  const c = turf.center(turf.featureCollection(ela.map(i=>turf.point(P(i)))));
+  let seed=ela[0], bd=Infinity;
+  ela.forEach(i=>{ const d=turf.distance(turf.point(P(i)), c, {units:'miles'}); if(d<bd){bd=d;seed=i;} });
+  const sel=[seed];
+  let acc = turf.buffer(turf.point(P(seed)), bufMi, {units:'miles', steps:6});
+  for(const org of ['ELACC','LTSC','Esperanza']){
+    let cand = orgIdx(org).filter(i=>!sel.includes(i));
+    while(cand.length){
+      cand.sort((a,b)=> nearMi(a,sel)-nearMi(b,sel));
+      const next=cand[0], ns=nearestSel(next,sel);
+      const piece = turf.buffer(turf.lineString([P(ns), P(next)]), bufMi, {units:'miles', steps:6});
+      let cu; try{ cu = turf.union(turf.featureCollection([acc, piece])) || acc; }catch(e){ cu = acc; }
+      const area = turf.area(cu)/M2_PER_SQMI;
+      if(area<=LIMIT_SQMI){ sel.push(next); acc=cu; cand.shift(); }
+      else break;  // nearest candidate already overflows -> farther ones will too
+    }
+  }
+  return {sel, poly:acc};
+}
+
+function buildAuto(bufMi){
+  const {poly}=autoBuild(bufMi);
+  autoZone=poly;
+  if(autoLayer) map.removeLayer(autoLayer);
+  autoLayer=L.geoJSON(poly,{style:{color:'#1c2530',weight:2,fillColor:'#1c2530',fillOpacity:.10}}).addTo(map);
+  autoLayer.bringToBack();
+  updateStats();
+  return poly;
+}
+
+btnAuto.onclick = () => {
+  clearManual(); clearAuto(); mode='auto';
+  btnClear.disabled=false;
+  spin.classList.add('show');
+  setTimeout(()=>{                                  // let the spinner paint first
+    const poly=buildAuto(parseFloat(bufSlider.value));
+    try{ map.fitBounds(autoLayer.getBounds(),{padding:[30,30]}); }catch(e){}
+    spin.classList.remove('show');
+  },30);
+};
+let bufTimer=null;
+bufSlider.oninput = () => {
+  bufVal.textContent = parseFloat(bufSlider.value).toFixed(2);
+  if(mode!=='auto') return;
+  spin.classList.add('show');
+  clearTimeout(bufTimer);                       // debounce: rebuild after the user pauses
+  bufTimer=setTimeout(()=>{ buildAuto(parseFloat(bufSlider.value)); spin.classList.remove('show'); }, 160);
+};
+
+// =================== MANUAL DRAW ===================
+btnDraw.onclick = () => { clearAuto(); clearManual(); mode='manual'; startDrawing(); updateStats(); };
+btnFinish.onclick = finishDrawing;
+btnUndo.onclick = () => { if(vertices.length){ vertices.pop(); rebuildHandles(); redraw(); } };
+btnClear.onclick = clearZone;
+
+function startDrawing(){
+  drawing = true;
+  map.getContainer().style.cursor = 'crosshair';
+  btnDraw.disabled=true; btnFinish.disabled=false; btnUndo.disabled=false; btnClear.disabled=false;
+}
+function finishDrawing(){
+  drawing = false;
+  map.getContainer().style.cursor = '';
+  btnDraw.disabled=false; btnFinish.disabled=true;
+  if(preview){ map.removeLayer(preview); preview=null; }
+  redraw();
+}
+function clearManual(){
+  drawing=false; vertices=[];
+  handles.forEach(h=>map.removeLayer(h)); handles=[];
+  if(poly){ map.removeLayer(poly); poly=null; }
+  if(preview){ map.removeLayer(preview); preview=null; }
+  map.getContainer().style.cursor='';
+  btnFinish.disabled=true; btnUndo.disabled=true;
+}
+function clearAuto(){
+  if(autoLayer){ map.removeLayer(autoLayer); autoLayer=null; }
+  autoZone=null;
+}
+function clearZone(){
+  clearManual(); clearAuto(); mode=null;
+  btnDraw.disabled=false; btnClear.disabled=true;
+  updateStats();
+}
+
+map.on('click', e => {
+  if(!drawing) return;
+  vertices.push({lat:e.latlng.lat, lng:e.latlng.lng});
+  addHandle(vertices.length-1);
+  redraw();
+});
+map.on('dblclick', () => { if(drawing && vertices.length>=3) finishDrawing(); });
+
+function addHandle(i){
+  const h = L.circleMarker([vertices[i].lat, vertices[i].lng], {
+    radius:6, color:'#1c2530', weight:2, fillColor:'#fff', fillOpacity:1,
+    draggable:true, className:'vtx'
+  }).addTo(map);
+  // circleMarker isn't draggable natively -> use a divIcon marker instead
+  map.removeLayer(h);
+  const mk = L.marker([vertices[i].lat, vertices[i].lng], {
+    draggable:true,
+    icon:L.divIcon({className:'', html:'<div style="width:13px;height:13px;border:2px solid #1c2530;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>', iconSize:[13,13], iconAnchor:[6.5,6.5]})
+  }).addTo(map);
+  mk.on('drag', ev => { const idx=handles.indexOf(mk); vertices[idx]={lat:ev.latlng.lat,lng:ev.latlng.lng}; redraw(); });
+  mk.on('dblclick', ev => { L.DomEvent.stop(ev); const idx=handles.indexOf(mk); if(vertices.length>3){ vertices.splice(idx,1); rebuildHandles(); redraw(); } });
+  handles.push(mk);
+}
+function rebuildHandles(){
+  handles.forEach(h=>map.removeLayer(h)); handles=[];
+  vertices.forEach((_,i)=>addHandle(i));
+}
+
+function redraw(){
+  const latlngs = vertices.map(v=>[v.lat,v.lng]);
+  if(poly){ map.removeLayer(poly); poly=null; }
+  if(preview){ map.removeLayer(preview); preview=null; }
+  if(vertices.length>=3){
+    poly = L.polygon(latlngs, {color:'#1c2530', weight:2, fillColor:'#1c2530', fillOpacity:.08, dashArray:drawing?'5,5':null}).addTo(map);
+    poly.bringToBack();
+  } else if(vertices.length>=1 && drawing){
+    preview = L.polyline(latlngs, {color:'#1c2530', weight:2, dashArray:'5,5'}).addTo(map);
+  }
+  updateStats();
+}
+
+// ---- stats (Turf: geodesic area + point-in-polygon, works for both modes) ----
+function updateStats(){
+  const zone = currentZone();
+  let area = 0;
+  if(zone){ try{ area = turf.area(zone)/M2_PER_SQMI; }catch(e){ area=0; } }
+  document.getElementById('sqmi').textContent = area.toFixed(2);
+  const bar = document.getElementById('bar');
+  bar.style.width = Math.min(area/LIMIT_SQMI, 1)*100 + '%';
+  const over = area > LIMIT_SQMI;
+  bar.style.background = over ? 'var(--warn)' : (area>4.0 ? '#e0a800' : 'var(--ok)');
+  document.getElementById('warn').classList.toggle('show', over);
+
+  const inside = {ELACC:0, LTSC:0, Esperanza:0};
+  propLayers.forEach(({p,m})=>{
+    let isIn = false;
+    if(zone){ try{ isIn = turf.booleanPointInPolygon([p.lon,p.lat], zone); }catch(e){} }
+    if(isIn) inside[p.org]++;
+    m.setStyle({fillOpacity: !zone || isIn ? 1 : .2, opacity: !zone || isIn ? 1 : .35});
+  });
+  document.getElementById('c-elacc').textContent = inside.ELACC;
+  document.getElementById('c-ltsc').textContent  = inside.LTSC;
+  document.getElementById('c-esp').textContent   = inside.Esperanza;
+  document.getElementById('c-total').textContent = inside.ELACC+inside.LTSC+inside.Esperanza;
+}
+
+updateStats();
+</script>
+</body>
+</html>
